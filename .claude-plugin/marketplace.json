@@ -1,0 +1,24 @@
+{
+  "name": "quota-exchange",
+  "description": "The quota-exchange plugin, distributed from its own repository",
+  "owner": {
+    "name": "AnExiledDev",
+    "email": "696222+AnExiledDev@users.noreply.github.com",
+    "url": "https://github.com/AnExiledDev"
+  },
+  "plugins": [
+    {
+      "name": "quota-exchange",
+      "source": "./",
+      "description": "What one percent of each subscription meter buys, per model, with drift detection: /quota",
+      "author": {
+        "name": "AnExiledDev",
+        "email": "696222+AnExiledDev@users.noreply.github.com"
+      },
+      "homepage": "https://github.com/AnExiledDev/quota-exchange-plugin",
+      "repository": "https://github.com/AnExiledDev/quota-exchange-plugin",
+      "license": "MIT",
+      "keywords": ["usage", "rate-limits", "quota", "subscription", "function-hooks", "pane"]
+    }
+  ]
+}

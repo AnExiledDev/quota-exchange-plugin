@@ -1,0 +1,4 @@
+{
+  "description": "The /quota pane: exchange rates, burn, history and diagnostics read from the estimator's snapshot",
+  "modules": ["module.js"]
+}

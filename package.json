@@ -1,0 +1,5 @@
+{
+    "name": "quota-exchange-plugin",
+    "private": true,
+    "type": "module"
+}
