@@ -47,18 +47,26 @@ let view = freshView();
  */
 let options = {};
 
-/** A `userConfig` string, then its environment variable, then nothing. */
-const setting = async ($, key, variable) => {
-    const declared = options[key];
+/** A declared `userConfig` string, trimmed, or `""` when it is not one. */
+const declared = (key) => {
+    const value = options[key];
 
-    if (typeof declared === "string" && declared.trim() !== "") {
-        return declared.trim();
-    }
-
-    const fromEnv = await safely($, () => $.env.get(variable));
-
-    return typeof fromEnv === "string" && fromEnv.trim() !== "" ? fromEnv.trim() : "";
+    return typeof value === "string" ? value.trim() : "";
 };
+
+/** The same, for whatever `$.env.get` returned. */
+const fromEnv = (value) => (typeof value === "string" ? value.trim() : "");
+
+/**
+ * The two resolvers are spelled out rather than sharing one helper taking the
+ * variable's name: `$.env.get` takes a literal, so that the variables a module
+ * touches can be listed without running it, and refuses a computed name.
+ */
+const estimatorSetting = async ($) =>
+    declared("estimator") || fromEnv(await safely($, () => $.env.get("QUOTA_EXCHANGE_ESTIMATOR")));
+
+const usageDirSetting = async ($) =>
+    declared("usageDir") || fromEnv(await safely($, () => $.env.get("QUOTA_EXCHANGE_USAGE_DIR")));
 
 function freshView() {
     return {
@@ -198,7 +206,7 @@ const reload = async ($) => {
  * happened in one line for the status row.
  */
 const refresh = async ($) => {
-    const script = await setting($, "estimator", "QUOTA_EXCHANGE_ESTIMATOR");
+    const script = await estimatorSetting($);
 
     if (script === "") {
         return "refresh needs the `estimator` setting (or QUOTA_EXCHANGE_ESTIMATOR) to name exchange.py; the cron refreshes hourly anyway";
@@ -226,7 +234,7 @@ const refresh = async ($) => {
 
 /** The `usageDir` setting, `QUOTA_EXCHANGE_USAGE_DIR`, or `~/.claude/usage`. */
 const usageDir = async ($) => {
-    const override = await setting($, "usageDir", "QUOTA_EXCHANGE_USAGE_DIR");
+    const override = await usageDirSetting($);
 
     if (override !== "") {
         return override.replace(/\/+$/, "");

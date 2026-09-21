@@ -11,11 +11,13 @@
   "userConfig": {
     "usageDir": {
       "type": "string",
+      "title": "Usage directory",
       "description": "Directory holding exchange-rate.json and exchange-history.jsonl. Empty reads ~/.claude/usage.",
       "default": ""
     },
     "estimator": {
       "type": "string",
+      "title": "Estimator script",
       "description": "Path to estimator/exchange.py, which `/quota refresh` runs. Empty means refresh says so and the cron's hourly fit is the only one.",
       "default": ""
     }
