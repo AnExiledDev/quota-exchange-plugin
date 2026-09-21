@@ -39,6 +39,27 @@ const RELOAD_MS = 5 * 60_000;
  */
 let view = freshView();
 
+/**
+ * The manifest's `userConfig`, as `register` was handed it. The two settings
+ * were environment variables first and both spellings still work, the
+ * manifest's winning: a config-menu row is the discoverable half, and the
+ * variable is what a cron line already exports around the session.
+ */
+let options = {};
+
+/** A `userConfig` string, then its environment variable, then nothing. */
+const setting = async ($, key, variable) => {
+    const declared = options[key];
+
+    if (typeof declared === "string" && declared.trim() !== "") {
+        return declared.trim();
+    }
+
+    const fromEnv = await safely($, () => $.env.get(variable));
+
+    return typeof fromEnv === "string" && fromEnv.trim() !== "" ? fromEnv.trim() : "";
+};
+
 function freshView() {
     return {
         tab: "overview",
@@ -56,7 +77,9 @@ function freshView() {
 }
 
 /** @type {import('claude-code').Register} */
-export const register = (on) => {
+export const register = (on, pluginOptions) => {
+    options = pluginOptions ?? {};
+
     on("session.start", async ($, e, next) => {
         view = freshView();
 
@@ -175,10 +198,10 @@ const reload = async ($) => {
  * happened in one line for the status row.
  */
 const refresh = async ($) => {
-    const script = await safely($, () => $.env.get("QUOTA_EXCHANGE_ESTIMATOR"));
+    const script = await setting($, "estimator", "QUOTA_EXCHANGE_ESTIMATOR");
 
-    if (typeof script !== "string" || script.trim() === "") {
-        return "refresh needs QUOTA_EXCHANGE_ESTIMATOR=/path/to/estimator/exchange.py; the cron refreshes hourly anyway";
+    if (script === "") {
+        return "refresh needs the `estimator` setting (or QUOTA_EXCHANGE_ESTIMATOR) to name exchange.py; the cron refreshes hourly anyway";
     }
 
     view.refreshing = true;
@@ -186,7 +209,7 @@ const refresh = async ($) => {
 
     try {
         const started = Date.now();
-        const result = await $.process.run(["python3", script.trim()], { timeoutMs: REFRESH_TIMEOUT_MS });
+        const result = await $.process.run(["python3", script], { timeoutMs: REFRESH_TIMEOUT_MS });
         const seconds = ((Date.now() - started) / 1000).toFixed(1);
 
         if (result.exitCode !== 0) {
@@ -201,12 +224,12 @@ const refresh = async ($) => {
     }
 };
 
-/** `QUOTA_EXCHANGE_USAGE_DIR`, or `~/.claude/usage`. */
+/** The `usageDir` setting, `QUOTA_EXCHANGE_USAGE_DIR`, or `~/.claude/usage`. */
 const usageDir = async ($) => {
-    const override = await safely($, () => $.env.get("QUOTA_EXCHANGE_USAGE_DIR"));
+    const override = await setting($, "usageDir", "QUOTA_EXCHANGE_USAGE_DIR");
 
-    if (typeof override === "string" && override.trim() !== "") {
-        return override.trim().replace(/\/+$/, "");
+    if (override !== "") {
+        return override.replace(/\/+$/, "");
     }
 
     const home = (await safely($, () => $.env.get("HOME"))) ?? "";

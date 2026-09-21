@@ -122,13 +122,20 @@ that each censoring rule fires on the case it is for.
 
 ### Configuration
 
-The plugin reads two environment variables (the plugin runtime has no
-plugin-root value, so paths cannot be relative to the install):
+Two settings, each an absolute path (the plugin runtime has no plugin-root
+value, so nothing can be relative to the install). Set either one in
+`/plugin`, under this plugin's configuration:
 
-| Variable | Default | Meaning |
+| Setting | Default | Meaning |
 | --- | --- | --- |
-| `QUOTA_EXCHANGE_USAGE_DIR` | `$HOME/.claude/usage` | where `exchange-rate.json` and `exchange-history.jsonl` live |
-| `QUOTA_EXCHANGE_ESTIMATOR` | unset | path to `exchange.py`; when set, the pane's refresh button runs it |
+| `usageDir` | `$HOME/.claude/usage` | where `exchange-rate.json` and `exchange-history.jsonl` live |
+| `estimator` | empty | path to `exchange.py`; when set, the pane's refresh button runs it |
+
+Both were environment variables first and both spellings still work:
+`QUOTA_EXCHANGE_USAGE_DIR` and `QUOTA_EXCHANGE_ESTIMATOR` are read when the
+matching setting is left empty. The setting wins when both are present. The
+variable is the one to use from a cron line that already exports its
+environment around the session.
 
 ## The pane
 

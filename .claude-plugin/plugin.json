@@ -1,11 +1,23 @@
 {
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "quota-exchange",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "What one percent of each subscription meter buys, per model, with drift detection: /quota",
   "author": {
     "name": "AnExiledDev",
     "email": "696222+AnExiledDev@users.noreply.github.com"
   },
-  "homepage": "https://github.com/AnExiledDev/quota-exchange-plugin"
+  "homepage": "https://github.com/AnExiledDev/quota-exchange-plugin",
+  "userConfig": {
+    "usageDir": {
+      "type": "string",
+      "description": "Directory holding exchange-rate.json and exchange-history.jsonl. Empty reads ~/.claude/usage.",
+      "default": ""
+    },
+    "estimator": {
+      "type": "string",
+      "description": "Path to estimator/exchange.py, which `/quota refresh` runs. Empty means refresh says so and the cron's hourly fit is the only one.",
+      "default": ""
+    }
+  }
 }
