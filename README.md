@@ -19,6 +19,8 @@ holds two halves:
 - `hooks/` is the plugin: a `/quota` command that opens a pane with five tabs
   over that snapshot.
 
+By the same author: [changelogs.core-directive.com](https://changelogs.core-directive.com), a changelog for every Claude Code release, written from what changed in the build.
+
 ## Provenance
 
 The operator directed the work in two utterances, quoted verbatim:
