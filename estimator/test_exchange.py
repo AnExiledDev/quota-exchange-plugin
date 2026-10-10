@@ -2,13 +2,17 @@
 
 A fake meter that charges known credits per percent, driven by fake traffic,
 must give those rates back; a percent that ticks while no request was logged
-must be censored, not fitted; and a lower reading a few seconds after a higher
-one must be treated as a reordered response, not as a level drop.
+must be censored, not fitted; a lower reading a few seconds after a higher
+one must be treated as a reordered response, not as a level drop; and traffic
+another machine sent around the proxy must be fitted from the unproxied log.
 
 Run:  python3 -m unittest estimator/test_exchange.py
 """
 
+import json
 import math
+import os
+import tempfile
 import unittest
 
 import numpy as np
@@ -137,6 +141,89 @@ class Recovery(unittest.TestCase):
         self.assertIsNone(report["models"][OPUS]["credits_per_percent"])
         self.assertTrue(report["models"][FABLE]["counted"])
         self.assertLess(abs(report["models"][FABLE]["credits_per_percent"] - RATES[FABLE]) / RATES[FABLE], 0.05)
+
+
+def usage_row(req, request_id):
+    c = req["counters"]
+
+    return {"captured_at": req["at"], "model": req["model"], "request_id": request_id, "input_tokens": c["input"],
+            "cache_creation_input_tokens": c["cache_write"], "cache_read_input_tokens": c["cache_read"],
+            "output_tokens": c["output"]}
+
+
+def header_row(at, used):
+    return {"captured_at": at, "status": 200,
+            "headers": {"anthropic-ratelimit-unified-5h-utilization": str(used / 100),
+                        "anthropic-ratelimit-unified-5h-reset": RESET}}
+
+
+class Unproxied(unittest.TestCase):
+    """A second machine on the account spends through no proxy; only its own log says what it spent."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.saved = exchange.USAGE_DIR
+        exchange.USAGE_DIR = self.dir.name
+        self.addCleanup(setattr, exchange, "USAGE_DIR", self.saved)
+
+    def write(self, name, rows):
+        with open(os.path.join(self.dir.name, name), "w") as fh:
+            fh.writelines(json.dumps(row) + "\n" for row in rows)
+
+    def split_traffic(self, every=3):
+        """Every `every`-th request bypasses the proxy: it is logged elsewhere and returns no headers here."""
+        requests, levels = simulate(seed=7)
+        proxied, unproxied, headers = [], [], []
+
+        for k, (req, (at, _, used)) in enumerate(zip(requests, levels)):
+            if k % every == 0:
+                unproxied.append(usage_row(req, f"req_{k}"))
+            else:
+                proxied.append(usage_row(req, f"req_{k}"))
+                headers.append(header_row(at, used))
+
+        self.write("proxy-headers.jsonl", headers)
+        self.write("proxy-usage.jsonl", proxied)
+
+        return unproxied
+
+    def assertRecovered(self, rates):
+        # A third of the readings never reach this machine, so the intervals are wider and the fit
+        # looser than Recovery's 5%; without the unproxied log it misses by 20-45%.
+        for model, truth in RATES.items():
+            self.assertLess(abs(rates[model]["credits_per_percent"] - truth) / truth, 0.10, model)
+
+    def rates(self):
+        levels, requests, _ = exchange.load(0, 2e9)
+        rows, _ = exchange.intervals_of(levels["5h"], requests)
+
+        return exchange.window_report(rows, 0, {})["models"]
+
+    def test_other_machines_tokens_are_fitted(self):
+        self.write("unproxied-usage.jsonl", self.split_traffic())
+
+        self.assertRecovered(self.rates())
+
+    def test_a_request_in_both_logs_counts_once(self):
+        unproxied = self.split_traffic()
+        # The unproxied log also carries every proxied request: a source that cannot tell them apart.
+        with open(os.path.join(self.dir.name, "proxy-usage.jsonl")) as fh:
+            proxied = [json.loads(line) for line in fh]
+
+        self.write("unproxied-usage.jsonl", unproxied + proxied)
+
+        _, requests, _ = exchange.load(0, 2e9)
+        self.assertEqual(len(requests), len(unproxied) + len(proxied))
+        self.assertRecovered(self.rates())
+
+    def test_missing_unproxied_log_reads_low(self):
+        # The failure the unproxied log exists for: with a third of the spend unlogged, a percent
+        # looks cheaper than it is.
+        self.split_traffic()
+
+        for model, truth in RATES.items():
+            self.assertLess(self.rates()[model]["credits_per_percent"], truth * 0.85, model)
 
 
 class Drift(unittest.TestCase):
