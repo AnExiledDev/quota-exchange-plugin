@@ -58,14 +58,14 @@ rate; if the snapshot is missing the pane says so and shows the cron line.
 
 ### Inputs
 
-Two JSONL files under `~/.claude/usage/`, written by a local proxy that sees
-every request's response headers:
+JSONL files under `~/.claude/usage/`; the first two are written by a local proxy that sees every request's response headers:
 
 - `proxy-headers.jsonl` (and a rotated `.1`): one row per response with the
   `anthropic-ratelimit-unified-{5h,7d,7d_oi}-utilization` and `-reset`
   headers.
 - `proxy-usage.jsonl` (and `.1`): one row per request with the model and the
   `usage` block (input, cache write, cache read, output tokens).
+- `unproxied-usage.jsonl` (and `.1`), optional: the same account's requests that never passed through the proxy, such as another machine on the same subscription, in the same row shape as `proxy-usage.jsonl` (`captured_at`, `model`, `request_id` and the token counts). A `request_id` already in `proxy-usage.jsonl` is counted once. Without it, a tick another machine spent is censored as an empty interval when the proxy logged nothing, and makes a percent look cheaper than it is when the proxy logged a little. How it gets written is up to you (an OpenTelemetry export is one source); rows without the 5-minute/1-hour cache-write split are priced at the 5-minute rate.
 
 ### Method
 
@@ -77,10 +77,7 @@ every request's response headers:
    traffic between two consecutive ticks of the same reset window is one
    interval; its cost is exactly 1% (or however many percent the reading
    moved).
-3. **Censoring.** The first reading of a window, the interval after a drop
-   (a reset, or a rollback), and empty intervals are excluded. A lower
-   reading within 60 s of the last accepted one is an out-of-order response
-   (`REORDER_SECONDS`) and counted as `reordered`, not as a drop.
+3. **Censoring.** The first reading of a window, the interval after a drop (a reset, or a rollback), and empty intervals (no request in either log) are excluded. A lower reading within 60 s of the last accepted one is an out-of-order response (`REORDER_SECONDS`) and counted as `reordered`, not as a drop.
 4. **Fit.** Non-negative least squares over the intervals: percent moved
    against credits per model. The slope for a model is credits per 1%. A
    robust residual pass drops outliers; a bootstrap (300 rounds) gives the

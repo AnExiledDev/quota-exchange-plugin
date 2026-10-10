@@ -29,8 +29,8 @@ What is censored, and why (each of these produced a wrong number before it was):
   open on the left;
 - the interval after a level went DOWN inside a window (a re-read, a fallback,
   or a tick the proxy saw out of order): its start is unknowable;
-- an interval with no requests through the proxy at all: something else on
-  the account spent the tick, so it is "unseen traffic", not a rate;
+- an interval with no logged requests at all: something else on the account
+  spent the tick, so it is "unseen traffic", not a rate;
 - an interval whose jump the fit cannot explain (outlier by robust residual):
   the same unseen traffic, or a proxy gap, dressed as a legitimate tick.
 
@@ -40,11 +40,19 @@ and across meters. The "split" fit lets the largest model's input, cache-write
 and output counters float separately; it is the check on the formula itself.
 If output stops fitting at about 5x input, the weights changed, not the price.
 
-Inputs (all passive, all already written by the prompt proxy):
+Inputs (all passive; the first two are written by the prompt proxy):
 
-    ~/.claude/usage/proxy-headers.jsonl[.1]   every response's rate headers
-    ~/.claude/usage/proxy-usage.jsonl[.1]     every response's model and tokens
-    ~/ops/usage-monitor/pricing.json          API list prices (optional)
+    ~/.claude/usage/proxy-headers.jsonl[.1]     every response's rate headers
+    ~/.claude/usage/proxy-usage.jsonl[.1]       every response's model and tokens
+    ~/.claude/usage/unproxied-usage.jsonl[.1]   optional: the same account's requests that
+                                                bypassed the proxy (another machine), same
+                                                row shape; a request_id already in
+                                                proxy-usage is counted once
+    ~/ops/usage-monitor/pricing.json            API list prices (optional)
+
+Without the unproxied file, a tick spent by another machine on the account is
+censored as unseen traffic when the proxy logged nothing in that interval, and
+makes a percent look cheaper than it is when the proxy logged a little.
 
 Outputs:
 
@@ -152,6 +160,16 @@ def counters_of(record):
     }
 
 
+def request_of(record, at):
+    return {
+        "at": at,
+        "model": normalize_model(record.get("model")),
+        "counters": counters_of(record),
+        "cache_write_5m": record.get("cache_creation_5m_tokens", 0),
+        "cache_write_1h": record.get("cache_creation_1h_tokens", 0),
+    }
+
+
 # ---------------------------------------------------------------- loading
 
 
@@ -198,19 +216,21 @@ def load(since, until):
             except (TypeError, ValueError):
                 continue
 
-    for record in rotated(os.path.join(USAGE_DIR, "proxy-usage.jsonl*")):
-        at = record.get("captured_at")
+    # The proxy's own log first, so a request that is in both files keeps its proxy row.
+    seen = set()
 
-        if not isinstance(at, (int, float)) or not since <= at < until:
-            continue
+    for name in ("proxy-usage.jsonl*", "unproxied-usage.jsonl*"):
+        for record in rotated(os.path.join(USAGE_DIR, name)):
+            at = record.get("captured_at")
+            request_id = record.get("request_id")
 
-        requests.append({
-            "at": at,
-            "model": normalize_model(record.get("model")),
-            "counters": counters_of(record),
-            "cache_write_5m": record.get("cache_creation_5m_tokens", 0),
-            "cache_write_1h": record.get("cache_creation_1h_tokens", 0),
-        })
+            if not isinstance(at, (int, float)) or not since <= at < until or request_id in seen:
+                continue
+
+            if request_id:
+                seen.add(request_id)
+
+            requests.append(request_of(record, at))
 
     for meter in METERS:
         levels[meter].sort(key=lambda row: row[0])
