@@ -39,6 +39,8 @@ per model using the fixed credit formula, so the numbers compare across runs
 and across meters. The "split" fit lets the largest model's input, cache-write
 and output counters float separately; it is the check on the formula itself.
 If output stops fitting at about 5x input, the weights changed, not the price.
+A third, the "reads" fit, adds the largest model's cache-read tokens as a column:
+the check on "cache reads are free", with a permutation test behind its verdict.
 
 Inputs (all passive; the first two are written by the prompt proxy):
 
@@ -95,7 +97,8 @@ WINDOWS = (("3d", 3), ("7d", 7), ("14d", 14), ("30d", 30))
 DRIFT_NOW, DRIFT_BASE = "3d", "14d"
 
 # Output tokens weigh about five input tokens on every meter measured so far;
-# cache reads weigh nothing. The split fit re-measures this every run.
+# the split fit re-measures this every run. Cache reads stay out of the credit
+# so the headline rate compares across runs; the reads fit measures them.
 OUTPUT_WEIGHT = 5.0
 
 # A model gets its own column only when it spent enough to be identifiable;
@@ -126,6 +129,11 @@ REORDER_SECONDS = 60
 # A drift verdict is only given for a model that explains at least this share
 # of the meter's movement in both windows; below it the band is too optimistic.
 DRIFT_MIN_SHARE = 0.10
+
+# The reads fit calls cache reads charged only when shuffled reads fit as well as the
+# real ones in at most this share of the shuffles.
+READS_PERMUTATIONS = 200
+READS_P_MAX = 0.01
 
 # How many models get the per-counter split fit, biggest spenders first.
 SPLIT_MODELS = 2
@@ -467,6 +475,66 @@ def split_fit(rows, columns, keep, model):
     }
 
 
+def reads_fit(rows, columns, keep, model, without_residual):
+    """The credit fit plus one column for `model`'s cache reads: the check on "cache reads are free".
+
+    Reports what one cache-read token weighs against one credit of the same model, the share
+    of the meter those reads explain, the model's credits per 1% once reads are charged, and
+    the mean residual with the column against `without_residual`. Zero is a legal answer, so
+    the band is taken on the weight itself, never on its reciprocal.
+
+    The bootstrap band alone gives false positives on synthetic free-read traffic, so
+    `charged` also needs a permutation test: the reads column shuffled across intervals
+    must fit worse than the real one in all but READS_P_MAX of the shuffles.
+    """
+    names, X = design(rows, columns)
+    reads = np.array([row["models"].get(model, {}).get("cache_read", 0) for row in rows], dtype=float)
+    X = np.column_stack([X, reads])
+    y = np.array([r["jump"] for r in rows], dtype=float)
+
+    if keep.sum() <= X.shape[1] + 2 or not reads[keep].any():
+        return None
+
+    slopes, _ = nnls(X[keep], y[keep])
+    boots = bootstrap(X, y, keep)
+    i = names.index(model)
+    b_model, b_read = float(slopes[i]), float(slopes[-1])
+    weights = boots[:, -1] / np.where(boots[:, i] > 0, boots[:, i], np.nan)
+    weights = weights[~np.isnan(weights)]
+    band = None if weights.size < len(boots) * 0.9 else [float(v) for v in np.percentile(weights, BAND)]
+    p_value = permutation_p(X, y, keep, slopes)
+
+    return {
+        "model": model,
+        "weight_vs_credit": None if b_model <= 0 else b_read / b_model,
+        "weight_band": band,
+        "weight_p95": None if band is None else float(np.percentile(weights, 95)),
+        "zero_in_bootstrap": float(np.mean(boots[:, -1] == 0)),
+        "share_of_percent": float(b_read * reads[keep].sum() / y[keep].sum()) if y[keep].sum() else None,
+        "credits_per_percent": None if b_model <= 0 else 1.0 / b_model,
+        "mean_abs_residual": float(np.abs(y[keep] - X[keep] @ slopes).mean()),
+        "mean_abs_residual_without": without_residual,
+        "p_value": p_value,
+        "charged": band is not None and band[0] > 0 and p_value <= READS_P_MAX,
+    }
+
+
+def permutation_p(X, y, keep, slopes):
+    """Share of shuffles of the last column (across kept intervals) that fit at least as well as the real one."""
+    rng = np.random.default_rng(int(y.sum()) + len(y) + 1)
+    kept = np.flatnonzero(keep)
+    real = float(((y[kept] - X[kept] @ slopes) ** 2).sum())
+    shuffled = X[kept].copy()
+    as_good = 0
+
+    for _ in range(READS_PERMUTATIONS):
+        shuffled[:, -1] = rng.permutation(shuffled[:, -1])
+        fitted, _ = nnls(shuffled, y[kept])
+        as_good += float(((y[kept] - shuffled @ fitted) ** 2).sum()) <= real
+
+    return (1 + as_good) / (1 + READS_PERMUTATIONS)
+
+
 def window_report(rows, since, usd_per_credit):
     """Everything the fit says about one meter over the intervals that closed since `since`."""
     rows = [r for r in rows if r["end"] >= since]
@@ -521,6 +589,8 @@ def window_report(rows, since, usd_per_credit):
         "residual_mad": fit["residual_mad"],
         "models": models,
         "split": {m: split_fit(rows, columns, fit["keep"], m) for m in columns[:SPLIT_MODELS] if m != OTHER},
+        "reads": None if columns[0] == OTHER else reads_fit(rows, columns, fit["keep"], columns[0],
+                                                            fit["mean_abs_residual"]),
     }
 
 
@@ -747,7 +817,8 @@ def build(now, since, until):
     return {
         "generated_at": now,
         "generated_at_iso": iso(now),
-        "method": "tick-interval NNLS on proxy headers; credits = input + cache_write + 5*output, cache reads free",
+        "method": "tick-interval NNLS on proxy headers; credits = input + cache_write + 5*output, cache reads "
+                  "left out (the reads fit measures them)",
         "output_weight": OUTPUT_WEIGHT,
         "windows": [label for label, _ in WINDOWS],
         "drift_rule": {"now": DRIFT_NOW, "baseline": DRIFT_BASE, "z": DRIFT_Z, "relative": DRIFT_RELATIVE},
@@ -776,7 +847,13 @@ def history_row(snapshot):
             model: {"rate": m["credits_per_percent"], "band": m["band"], "n": window.get("intervals_used")}
             for model, m in (window.get("models") or {}).items()
         }
-        row["meters"][meter] = {"models": models, "drift": {m: d["verdict"] for m, d in (report["drift"] or {}).items()}}
+        reads = window.get("reads")
+        row["meters"][meter] = {
+            "models": models,
+            "drift": {m: d["verdict"] for m, d in (report["drift"] or {}).items()},
+            "reads": None if not reads else {key: reads[key] for key in ("model", "weight_vs_credit", "weight_band",
+                                                                          "share_of_percent", "charged")},
+        }
 
     return row
 
@@ -830,6 +907,15 @@ def print_report(snapshot):
                 band = "" if band is None else f" [{band[0]:.1f}-{band[1]:.1f}]"
                 print(f"  split ({model}, 7d): output weighs {split['output_per_cache_write']:.1f}x{band} a cache-write token; "
                       f"formula expects {split['formula_expects']:.1f}x")
+
+        reads = (report["windows"].get("7d") or {}).get("reads")
+
+        if reads and reads["weight_vs_credit"] is not None:
+            band = reads["weight_band"]
+            band = "" if band is None else f" [{band[0]:.4f}-{band[1]:.4f}]"
+            print(f"  reads ({reads['model']}, 7d): a cache-read token weighs {reads['weight_vs_credit']:.4f}{band} of a credit, "
+                  f"{reads['share_of_percent'] * 100:.0f}% of the meter; residual {reads['mean_abs_residual_without']:.3f} "
+                  f"-> {reads['mean_abs_residual']:.3f}; {'CHARGED' if reads['charged'] else 'free within the band'}")
 
         for model, d in (report["drift"] or {}).items():
             if d["verdict"] != "stable":
