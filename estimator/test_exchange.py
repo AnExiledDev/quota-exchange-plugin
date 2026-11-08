@@ -31,8 +31,10 @@ def request(at, model, output, cache_write=0, cache_read=0, inp=0):
     return {"at": at, "model": model, "counters": counters, "cache_write_5m": cache_write, "cache_write_1h": 0}
 
 
-def simulate(seed=1, requests_n=1200, gap=120):
-    """Traffic at a fixed cadence; the meter's whole-percent reading after every request."""
+def simulate(seed=1, requests_n=1200, gap=120, read_weights=None):
+    """Traffic at a fixed cadence; the meter's whole-percent reading after every request.
+    `read_weights` is what the fake meter charges per cache-read token, in credits, by model."""
+    read_weights = read_weights or {}
     rng = np.random.default_rng(seed)
     requests, levels = [], []
     spent, at = 0.0, 1_000_000
@@ -45,7 +47,7 @@ def simulate(seed=1, requests_n=1200, gap=120):
         cache_read = int(rng.integers(0, 150_000))
         req = request(at, model, output, cache_write, cache_read)
         requests.append(req)
-        spent += exchange.credits_of(req["counters"]) / RATES[model]
+        spent += (exchange.credits_of(req["counters"]) + read_weights.get(model, 0.0) * cache_read) / RATES[model]
         levels.append((at, RESET, int(spent)))
 
     return requests, levels
@@ -73,6 +75,30 @@ class Recovery(unittest.TestCase):
         # The first reading, and the first tick (whose start is unknown).
         self.assertEqual(censored["first_level"], 2)
         self.assertGreater(report["explained"], 0.95)
+
+    def test_free_cache_reads_are_never_called_charged(self):
+        # A small sample is where a spurious reads weight shows up; the permutation test must catch it.
+        for seed in range(1, 6):
+            with self.subTest(seed=seed):
+                requests, levels = simulate(seed=seed)
+                _, _, report = self.fit(requests, levels)
+
+                self.assertEqual(report["reads"]["model"], OPUS)
+                self.assertFalse(report["reads"]["charged"], report["reads"])
+
+    def test_charged_cache_reads_are_measured(self):
+        # A meter that bills Opus cache reads at a tenth of a credit (the API list ratio), which the
+        # headline credit formula ignores. The reads fit measures the biggest spender's reads only.
+        for seed in range(1, 6):
+            with self.subTest(seed=seed):
+                requests, levels = simulate(seed=seed, requests_n=8000, read_weights={OPUS: 0.1})
+                _, _, report = self.fit(requests, levels)
+                reads = report["reads"]
+
+                self.assertTrue(reads["charged"], reads)
+                self.assertLess(abs(reads["weight_vs_credit"] - 0.1) / 0.1, 0.2, reads)
+                self.assertLess(abs(reads["credits_per_percent"] - RATES[OPUS]) / RATES[OPUS], 0.1, reads)
+                self.assertLess(reads["mean_abs_residual"], reads["mean_abs_residual_without"])
 
     def test_unseen_traffic_is_censored(self):
         requests, levels = simulate()

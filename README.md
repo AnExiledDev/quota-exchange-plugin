@@ -69,10 +69,7 @@ JSONL files under `~/.claude/usage/`; the first two are written by a local proxy
 
 ### Method
 
-1. **Credits.** Every request is priced in Opus-equivalent credits,
-   `input + cache_write + 5 × output`; cache reads are free. This is the
-   formula the meters are observed to follow (the split fit below checks
-   it).
+1. **Credits.** Every request is priced in Opus-equivalent credits, `input + cache_write + 5 × output`. Cache reads are left out so the headline rate stays comparable across runs; the split fit checks the weights and the reads fit checks whether reads are really free.
 2. **Ticks.** A meter's whole-percent reading only changes at a tick. The
    traffic between two consecutive ticks of the same reset window is one
    interval; its cost is exactly 1% (or however many percent the reading
@@ -95,6 +92,7 @@ JSONL files under `~/.claude/usage/`; the first two are written by a local proxy
    a z-test on the bootstrap bands. `grew` or `shrank` needs |z| ≥ 3 and a
    relative change of 10% or more; a model under 10% share in either window
    gets no verdict.
+9. **Reads fit.** The credit fit is repeated with one more column, the biggest spender's cache-read tokens. It reports what a cache-read token weighs against one credit (with a 16-84% band and a 95th percentile), the share of the meter the reads explain, that model's credits per 1% once reads are charged, and the mean residual with and without the column. `charged` needs the band clear of zero and a permutation test: the reads column shuffled across intervals 200 times must fit as well as the real one in at most 1% of the shuffles. The band alone flags free reads as charged on some synthetic samples; the permutation test is what stops that. The 7-day window's result is also written to the history file.
 
 ### Running it
 
@@ -170,6 +168,8 @@ while the pane is open.
 - Opus input tokens are not separately identifiable from cache writes at
   current traffic; the split fit's bands say so. The combined credit rate
   is identifiable.
+- The reads band is too narrow. On synthetic data with about 100 intervals (a 7-day window here) the true weight fell outside it in 2 of 10 runs; read the weight as good to about 40%, and trust `charged` (which also needs the permutation test) over the band.
+- The reads fit cannot tell cache reads apart from anything unlogged that grows with context size. It does rule out request count, elapsed time, free per-counter weights and the 5m/1h write split as stand-ins: on one account's November 2026 data the reads column survived each of those as an extra column.
 - A model with too little traffic in a window is `identifiable: false`
   (band wider than the rate). The pane shows it, greyed.
 - A drift verdict compares 3 days to 14 days. A change in your own model
